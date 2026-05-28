@@ -1,0 +1,227 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────
+// ORGANIZATIONS & USERS
+// ─────────────────────────────────────
+
+model Organization {
+  id                 String    @id @default(cuid())
+  name               String
+  slug               String    @unique
+  size               String    // '<10' | '10-50' | '50-200' | '200+'
+  subscriptionTier   String    @default("trial") // 'trial'|'starter'|'pro'|'business'|'enterprise'
+  subscriptionStatus String    @default("trial") // 'trial'|'active'|'expired'
+  trialEndsAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  users    User[]
+  projects Project[]
+}
+
+model User {
+  id             String       @id // Clerk userId
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  fullName       String
+  email          String
+  role           String // 'owner'|'admin'|'pm'|'supervisor'|'viewer'
+  avatarUrl      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  progressActuals ProgressActual[]
+  costActuals     CostActual[]
+  documents       Document[]
+
+  @@index([organizationId])
+}
+
+// ─────────────────────────────────────
+// PROJECTS
+// ─────────────────────────────────────
+
+model Project {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  code           String // e.g. "PRJ-001"
+  clientName     String
+  location       String
+  contractValue  Decimal
+  startDate      DateTime
+  endDate        DateTime
+  status         String       @default("planning") // 'planning'|'active'|'on_hold'|'completed'
+  periodType     String       @default("weekly") // 'weekly'|'monthly'
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  wbsItems    WbsItem[]
+  budgetItems BudgetItem[]
+  documents   Document[]
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+}
+
+// ─────────────────────────────────────
+// WBS (WORK BREAKDOWN STRUCTURE) = RAB
+// ─────────────────────────────────────
+
+model WbsItem {
+  id             String    @id @default(cuid())
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organizationId String
+  parentId       String?
+  parent         WbsItem?  @relation("WbsChildren", fields: [parentId], references: [id])
+  children       WbsItem[] @relation("WbsChildren")
+  code           String // "1", "1.1", "1.1.1"
+  name           String
+  level          Int // 1 | 2 | 3
+  unit           String? // m³, m², unit, ls, etc.
+  volume         Decimal?
+  unitPrice      Decimal?
+  totalPrice     Decimal? // computed: volume * unitPrice
+  weight         Decimal? // % weight of total project (leaf nodes only)
+  sortOrder      Int       @default(0)
+  isLeaf         Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  progressPlans   ProgressPlan[]
+  progressActuals ProgressActual[]
+
+  @@index([projectId])
+  @@index([organizationId])
+  @@index([projectId, parentId])
+}
+
+// ─────────────────────────────────────
+// PROGRESS PLANNING (S-CURVE RENCANA)
+// ─────────────────────────────────────
+
+model ProgressPlan {
+  id                String   @id @default(cuid())
+  wbsItemId         String
+  wbsItem           WbsItem  @relation(fields: [wbsItemId], references: [id], onDelete: Cascade)
+  organizationId    String
+  periodDate        DateTime // start of week or month
+  periodType        String // 'weekly' | 'monthly'
+  plannedPercentage Decimal // % of this item's total volume for this period
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([wbsItemId, periodDate, periodType])
+  @@index([wbsItemId])
+  @@index([organizationId])
+}
+
+// ─────────────────────────────────────
+// PROGRESS ACTUALS (INPUT LAPANGAN)
+// ─────────────────────────────────────
+
+model ProgressActual {
+  id               String   @id @default(cuid())
+  wbsItemId        String
+  wbsItem          WbsItem  @relation(fields: [wbsItemId], references: [id], onDelete: Cascade)
+  organizationId   String
+  periodDate       DateTime
+  periodType       String // 'weekly' | 'monthly'
+  actualPercentage Decimal
+  notes            String?
+  isLocked         Boolean  @default(false)
+  reportedById     String
+  reportedBy       User     @relation(fields: [reportedById], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  photos ProgressPhoto[]
+
+  @@unique([wbsItemId, periodDate, periodType])
+  @@index([wbsItemId])
+  @@index([organizationId])
+}
+
+model ProgressPhoto {
+  id               String         @id @default(cuid())
+  progressActualId String
+  progressActual   ProgressActual @relation(fields: [progressActualId], references: [id], onDelete: Cascade)
+  fileUrl          String // Uploadthing URL
+  fileName         String
+  gpsLat           Decimal? // GPS latitude (mobile)
+  gpsLng           Decimal? // GPS longitude (mobile)
+  createdAt        DateTime       @default(now())
+
+  @@index([progressActualId])
+}
+
+// ─────────────────────────────────────
+// BUDGET & COST (RAB KATEGORI)
+// ─────────────────────────────────────
+
+model BudgetItem {
+  id             String     @id @default(cuid())
+  projectId      String
+  project        Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organizationId String
+  category       String // 'material'|'labor'|'equipment'|'subcon'|'overhead'
+  description    String
+  budgetedAmount Decimal
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  costActuals CostActual[]
+
+  @@index([projectId])
+  @@index([organizationId])
+}
+
+model CostActual {
+  id              String     @id @default(cuid())
+  budgetItemId    String
+  budgetItem      BudgetItem @relation(fields: [budgetItemId], references: [id], onDelete: Cascade)
+  organizationId  String
+  amount          Decimal
+  description     String
+  transactionDate DateTime
+  receiptUrl      String? // Uploadthing URL
+  createdById     String
+  createdBy       User       @relation(fields: [createdById], references: [id])
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([budgetItemId])
+  @@index([organizationId])
+}
+
+// ─────────────────────────────────────
+// DOCUMENTS
+// ─────────────────────────────────────
+
+model Document {
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organizationId String
+  name           String
+  fileUrl        String // Uploadthing URL
+  fileType       String // 'drawing'|'contract'|'report'|'photo'|'other'
+  uploadedById   String
+  uploadedBy     User     @relation(fields: [uploadedById], references: [id])
+  createdAt      DateTime @default(now())
+
+  @@index([projectId])
+  @@index([organizationId])
+}

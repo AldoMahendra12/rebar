@@ -3,6 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": ["DATABASE_URL", "CLERK_SECRET_KEY", "UPLOADTHING_TOKEN"],
       "outputs": [".next/**", "!.next/cache/**"]
     },
     "dev": {
